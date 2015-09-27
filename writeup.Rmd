@@ -1,0 +1,245 @@
+---
+title: "Using Machine Learning To Predict Activity Class of Weight Lifting Exercises"
+author: "Kalyan S. Mupparaju"
+date: "September 26, 2015"
+output: html_document
+---
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+#### Data
+
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project comes from this source: http://groupware.les.inf.puc-rio.br/har.
+
+## Objective
+
+In this project we try to build a prediction model on the training data to predict the manner in which the participants did the exercises. This is the "classe" variable in the training set. We will apply this model to a cross validation set to estimate our out of sample error rate. We will then apply our model to the test data and predict the "classe" for each case in the test set.
+
+## Getting and Cleaning the Data
+
+First, we download the training and test data from the given links.
+
+```{r DownloadTrain, cache=TRUE}
+trainingRaw <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                        na.strings = c("NA","#DIV/0!",""))
+
+testRaw <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                    na.strings = c("NA","#DIV/0!",""))
+```
+
+Looking at training data, we find that there are many variables which have almost all NA values. It is not logical to impute missing values in this data set as all the variables with missing values have less than 2% of actual data.
+
+```{r strTrain, results='hide'}
+str(trainingRaw) ##Results not shown for brevity.
+```
+
+We will not be using those variables with many NAs and thus we remove them from the dataframe.
+
+```{r trainNoNA, cache=TRUE}
+NAid <- sapply(names(trainingRaw),function(x) sum(is.na(trainingRaw[,x])))
+trainNoNA <- trainingRaw[,which(NAid==0)]
+```
+
+We then check for variables with near zero variance. Such variables would not contribute much for the model and hence can be discarded. Also the "X" variable is nothing but a serial number and should be removed.
+
+```{r trainFinal, cache=TRUE}
+suppressMessages(library(caret))
+nzv <- nearZeroVar(trainNoNA, saveMetrics = T)
+trainNZV <- trainNoNA[,nzv$nzv==FALSE]
+trainFinal <- trainNZV[,-1]
+```
+
+So, we now have have clean training set using which we can build our prediction model. 
+
+## Selecting Predictors
+
+Ideally, we should not be using the username, timestamp and window number variables to predict classe as this experiment was designed to recognise the quality of activity based on data from accelerometers on the belt, forearm, arm, and dumbell. Using predictors like username, timestamp and window number might give us slighhtly better accuracy measures in the present data set but they will not be usefull to predict activity type in any other data. 
+
+However, as we get only two guesses to get our prediction right and as we are given the liberty to choose any of the other variables as preictors, we will go ahead and build two models- one ideal model with only accelerometer data and the other one with all the clean variables available to obtain higher accuracy. 
+
+```{r IdealData,cache=TRUE}
+trainIdeal <- trainFinal[,-5:-1] ##Taking only accelerometer data
+```
+
+## Building a Random Forest model using only accelerometer data (Ideal Model)
+
+#### Partitioning training data for cross validation
+
+We first partition the training data into another training set on which we will build our model and a cross validation set to get an estimate of out of sample error.
+
+```{r IdealcV, cache=TRUE}
+suppressMessages(library(caret))
+set.seed(280194)
+inTrain = createDataPartition(trainFinal$classe, p = 3/4, list=FALSE)
+trainModIdeal = trainIdeal[inTrain,]
+traincVIdeal = trainIdeal[-inTrain,]
+```
+
+#### Note about cross validation in random forests
+
+Actually, as we are using randon forest method we need not perform cross validation explicitly to get the out of sample error rate estimate. The out of sample error estimate( or "out-of-bag-error estimate" as it is refered to in the random forest model output) is estimated internally during the model building as follows:
+
+* Each tree is constructed using a different bootstrap sample from the original data. 
+* About one-third of the cases are left out of the bootstrap sample and not used in the construction of the kth tree.
+* Put each case left out in the construction of the kth tree down the kth tree to get a classification. In this way, a test set classification is obtained for each case in about one-third of the trees. 
+* At the end of the run, take j to be the class that got most of the votes every time case n was oob. The proportion of times that j is not equal to the true class of n averaged over all cases is the oob error estimate. 
+
+This has proven to be unbiased in many tests.
+
+#### Building model
+
+Now we actually build the model. We use the trainControl function to specify the resampling method as cross-validation(k-fold).
+
+```{r IdealModel, cache=TRUE}
+set.seed(280194)
+modelIdeal <- train(classe ~., method="rf", data=trainModIdeal, 
+                    trControl=trainControl(method='cv'), allowParallel=TRUE )
+```
+
+We look at some information about the model we built. 
+
+```{r IdealModInfo, cache=TRUE}
+modelIdeal
+```
+
+Here we see that the out-of-bag error rate estimate **(oob error rate) is 0.67%**. This is quite low, so this model is quite reliable.
+
+```{r IdealModFin,cache=TRUE}
+modelIdeal$finalModel
+```
+
+```{r IdealModConfMat,cache=TRUE}
+confusionMatrix(trainModIdeal$classe,modelIdeal$finalModel$predicted)
+```
+
+Therefore the accuracy of this model when applied to the same data on which it was built is 99.33%.
+
+#### Cross Validation
+
+Even though we have an estimate of the out of sample error rate, we still apply our model to the crosss validation set we created, to get one truly out of sample error estimate.
+
+```{r IdealModcV,cache=TRUE}
+cvPredIdeal <- predict(modelIdeal, traincVIdeal)
+confusionMatrix(cvPredIdeal,traincVIdeal$classe)
+```
+
+We can calculate the error rate from the confusion matrix.
+
+```{r ErrorMat, cache=TRUE}
+matconIdeal <- confusionMatrix(cvPredIdeal,traincVIdeal$classe)$table
+matconIdeal
+truPred <- sum(matconIdeal[1,1],matconIdeal[2,2],matconIdeal[3,3],matconIdeal[4,4],matconIdeal[5,5])
+allPred <- sum(rowSums(matconIdeal))
+falsePred <- allPred - truPred
+OOSerrorIdeal <- (falsePred/allPred)*100 #out of sample error rate (%)
+OOSerrorIdeal
+```
+
+Therefore this out of sample error rate (0.6933%) is almost the same as the oob error rate estimate we got from the model itself(0.67%).
+
+#### Predicting the outcome "classe" for test set
+
+Now we apply this model to test data to predict the "classe" (activity class) outcome for the 20 test cases.
+
+```{r IdealTestPred}
+predict(modelIdeal,testRaw)
+```
+
+## Building a random forest model using all the clean variables available(High Accuracy Model)
+
+Here we include non accelerometer data variables like username, timestamps and window number as predictors to achieve higher accuracy, so that we can be sure about our results from previous model.
+
+All the steps are similar to the previous model.
+
+#### Partitioning training data for cross validation
+
+```{r model2cV, cache=TRUE}
+set.seed(280194)
+inTrain1 = createDataPartition(trainFinal$classe, p = 3/4, list=FALSE)
+trainMod = trainFinal[inTrain1,]
+traincV = trainFinal[-inTrain1,]
+```
+
+#### Building model
+
+```{r model2build, cache=TRUE}
+set.seed(280194)
+modelFit <- train(classe ~., method="rf", data=trainMod, 
+                  trControl=trainControl(method='cv'), allowParallel=TRUE )
+```
+
+We look at some information about the model we built. 
+
+```{r Mod2Info,cache=TRUE}
+modelFit
+```
+
+Here we see that the out-of-bag error rate estimate **(oob error rate) is 0.06%**. This is less than the oob error rate estimate of the previous model(ideal model).
+
+```{r Mod2Fin,cache=TRUE}
+modelFit$finalModel
+```
+
+```{r Mod2ConfMat,cache=TRUE}
+confusionMatrix(trainMod$classe,modelFit$finalModel$predicted)
+```
+
+We see that the accuracy of this model when applied to the same data on which it was built is 99.94%. This is also improved over the ideal model.
+
+#### Cross Validation
+
+Even though we have an estimate of the out of sample error rate, we still apply our model to the crosss validation set we created, to get one truly out of sample error estimate.
+
+```{r Mod2cV,cache=TRUE}
+cvPred <- predict(modelFit, traincV)
+confusionMatrix(cvPred,traincV$classe)
+```
+
+We can calculate the error rate from the confusion matrix.
+
+```{r ErrorMat2,cache=TRUE}
+matcon <- confusionMatrix(cvPred,traincV$classe)$table
+matcon
+truPred2 <- sum(matcon[1,1],matcon[2,2],matcon[3,3],matcon[4,4],matcon[5,5])
+allPred2 <- sum(rowSums(matcon))
+falsePred2 <- allPred2 - truPred2
+OOSerrorIdeal2 <- (falsePred2/allPred2)*100 #out of sample error rate (%)
+OOSerrorIdeal2
+```
+
+Therefore this out of sample error rate (0.08%) is almost the same as the oob error rate estimate we got from the model itself (0.06%).
+
+#### Predicting the outcome "classe" for test set
+
+Now we apply this model to test data to predict the "classe" (activity class) outcome for the 20 test cases.
+
+```{r Mod2TestPred}
+predict(modelFit,testRaw)
+```
+
+### Comparing the prediction results of the two models
+
+So, we fit two models:
+
+* One ideal model which uses only acclelerometer data to train the model
+* Another model which uses even username, timestamps and window number along with accelerometer data, so as to obtain higher accuracy. We did this to have a safe second guess.
+
+Now we compare the predictions of these two models.
+
+```{r compare}
+compare <- cbind(as.data.frame(predict(modelIdeal,testRaw)),as.data.frame(predict(modelFit,testRaw)))
+colnames(compare) <- c("Ideal Model Predictions","High Accuracy Model Predictions")
+compare
+```
+
+We see that we get the same results from both the models. And as both models have high accuracies and low out of sample error estimates on a cross validation set, these predictions are our best predictions. 
